@@ -6,8 +6,11 @@ import dev.detekt.test.TestConfig
 import dev.detekt.test.assertj.assertThat
 import dev.detekt.test.lint
 import dev.detekt.test.toConfig
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import java.util.regex.PatternSyntaxException
 
 private const val FORBIDDEN_IMPORTS = "forbiddenImports"
 private const val ALLOWED_IMPORTS = "allowedImports"
@@ -126,5 +129,188 @@ class ForbiddenImportSpec {
         val findings = ForbiddenImport(config).lint(code, compile = false)
         assertThat(findings).singleElement()
             .hasMessage("The import `net.example.R.dimen` has been forbidden in the detekt config.")
+    }
+
+    @Test
+    @DisplayName("should report kotlin.SinceKotlin when specified via kotlin.SinceKotli?")
+    fun singleCharacterWildcardMatchesOneCharacter() {
+        val findings = ForbiddenImport(TestConfig(FORBIDDEN_IMPORTS to listOf("kotlin.SinceKotli?")))
+            .lint(code, compile = false)
+        assertThat(findings).singleElement()
+            .hasMessage("The import `kotlin.SinceKotlin` has been forbidden in the detekt config.")
+    }
+
+    @Test
+    @DisplayName("should not report kotlin.SinceKotlin when specified via kotlin.SinceKotlin?")
+    fun singleCharacterWildcardRequiresACharacter() {
+        val findings = ForbiddenImport(TestConfig(FORBIDDEN_IMPORTS to listOf("kotlin.SinceKotlin?")))
+            .lint(code, compile = false)
+        assertThat(findings).isEmpty()
+    }
+
+    @Test
+    fun `should report an aliased import by its original name`() {
+        val aliasedCode = """
+            package foo
+
+            import kotlin.SinceKotlin as Since
+        """.trimIndent()
+        val findings = ForbiddenImport(TestConfig(FORBIDDEN_IMPORTS to listOf("kotlin.SinceKotlin")))
+            .lint(aliasedCode, compile = false)
+        assertThat(findings).singleElement()
+            .hasMessage("The import `kotlin.SinceKotlin` has been forbidden in the detekt config.")
+    }
+
+    @Test
+    @DisplayName("should report kotlin.SinceKotlin when specified via regex alternation")
+    fun regexSyntaxIsPassedThrough() {
+        val findings = ForbiddenImport(TestConfig(FORBIDDEN_IMPORTS to listOf("kotlin.(SinceKotlin|Deprecated)")))
+            .lint(code, compile = false)
+        assertThat(findings).singleElement()
+            .hasMessage("The import `kotlin.SinceKotlin` has been forbidden in the detekt config.")
+    }
+
+    @Test
+    @DisplayName("should not report kotlin.SinceKotlin when the dot is escaped, as dots cannot be escaped")
+    fun dotsCannotBeEscaped() {
+        val findings = ForbiddenImport(TestConfig(FORBIDDEN_IMPORTS to listOf("""kotlin\.SinceKotlin""")))
+            .lint(code, compile = false)
+        assertThat(findings).isEmpty()
+    }
+
+    @Test
+    @DisplayName("should not report kotlin.SinceKotlin for kotlin.SinceKotli. as a dot is never a wildcard")
+    fun dotIsAlwaysLiteral() {
+        val findings = ForbiddenImport(TestConfig(FORBIDDEN_IMPORTS to listOf("kotlin.SinceKotli.")))
+            .lint(code, compile = false)
+        assertThat(findings).isEmpty()
+    }
+
+    @Test
+    fun `should fail the analysis when a pattern is not valid`() {
+        val rule = ForbiddenImport(TestConfig(FORBIDDEN_IMPORTS to listOf("kotlin.[")))
+        assertThatThrownBy { rule.lint(code, compile = false) }
+            .isInstanceOf(PatternSyntaxException::class.java)
+    }
+
+    @Nested
+    inner class StarImports {
+        val code = """
+            package foo
+
+            import java.util.*
+        """.trimIndent()
+
+        @Test
+        @DisplayName("should report import java.util.* when specified via java.util.*")
+        fun reportStarImportSpecifiedWithStar() {
+            val findings = ForbiddenImport(TestConfig(FORBIDDEN_IMPORTS to listOf("java.util.*")))
+                .lint(code, compile = false)
+            assertThat(findings).singleElement()
+                .hasMessage("The import `java.util.*` has been forbidden in the detekt config.")
+        }
+
+        @Test
+        @DisplayName("should report import java.util.* when specified via java.util")
+        fun reportStarImportSpecifiedWithoutStar() {
+            val findings = ForbiddenImport(TestConfig(FORBIDDEN_IMPORTS to listOf("java.util")))
+                .lint(code, compile = false)
+            assertThat(findings).singleElement()
+                .hasMessage("The import `java.util.*` has been forbidden in the detekt config.")
+        }
+
+        @Test
+        @DisplayName("should report the reason for import java.util.*")
+        fun reportStarImportWithReason() {
+            val config = TestConfig(
+                FORBIDDEN_IMPORTS to listOf(
+                    ValueWithReason("java.util.*", "Use kotlin.collections instead.").toConfig()
+                )
+            )
+            val findings = ForbiddenImport(config).lint(code, compile = false)
+            assertThat(findings).singleElement()
+                .hasMessage("The import `java.util.*` has been forbidden: Use kotlin.collections instead.")
+        }
+
+        @Test
+        @DisplayName("should not report import java.util.* when only java.util.Date is forbidden")
+        fun doNotReportStarImportForMemberPattern() {
+            val findings = ForbiddenImport(TestConfig(FORBIDDEN_IMPORTS to listOf("java.util.Date")))
+                .lint(code, compile = false)
+            assertThat(findings).isEmpty()
+        }
+
+        @Test
+        @DisplayName("should not report import java.util.* when allowed via java.util.*")
+        fun doNotReportStarImportAllowedWithStar() {
+            val config = TestConfig(
+                FORBIDDEN_IMPORTS to listOf("java.*"),
+                ALLOWED_IMPORTS to listOf("java.util.*")
+            )
+            val findings = ForbiddenImport(config).lint(code, compile = false)
+            assertThat(findings).isEmpty()
+        }
+
+        @Test
+        @DisplayName("should not report import java.util.* when allowed via java.util")
+        fun doNotReportStarImportAllowedWithoutStar() {
+            val config = TestConfig(
+                FORBIDDEN_IMPORTS to listOf("java.*"),
+                ALLOWED_IMPORTS to listOf("java.util")
+            )
+            val findings = ForbiddenImport(config).lint(code, compile = false)
+            assertThat(findings).isEmpty()
+        }
+
+        @Test
+        @DisplayName("should report import java.util.* when only a member is allowed")
+        fun reportStarImportWhenOnlyAMemberIsAllowed() {
+            val config = TestConfig(
+                FORBIDDEN_IMPORTS to listOf("java.util.*"),
+                ALLOWED_IMPORTS to listOf("java.util.UUID")
+            )
+            val findings = ForbiddenImport(config).lint(code, compile = false)
+            assertThat(findings).singleElement()
+                .hasMessage("The import `java.util.*` has been forbidden in the detekt config.")
+        }
+
+        @Test
+        @DisplayName("should report import java.util.* when specified via java.util.?")
+        fun reportStarImportForSingleCharacterWildcard() {
+            val findings = ForbiddenImport(TestConfig(FORBIDDEN_IMPORTS to listOf("java.util.?")))
+                .lint(code, compile = false)
+            assertThat(findings).singleElement()
+                .hasMessage("The import `java.util.*` has been forbidden in the detekt config.")
+        }
+
+        @Test
+        @DisplayName("should report an all-under import of a class")
+        fun reportAllUnderImportOfAClass() {
+            val classCode = """
+                package foo
+
+                import com.example.Foo.*
+            """.trimIndent()
+            val findings = ForbiddenImport(TestConfig(FORBIDDEN_IMPORTS to listOf("com.example.Foo.*")))
+                .lint(classCode, compile = false)
+            assertThat(findings).singleElement()
+                .hasMessage("The import `com.example.Foo.*` has been forbidden in the detekt config.")
+        }
+
+        @Test
+        @DisplayName("should not report an all-under import of a class allowed by its name")
+        fun doNotReportAllUnderImportOfAnAllowedClass() {
+            val classCode = """
+                package foo
+
+                import com.example.Foo.*
+            """.trimIndent()
+            val config = TestConfig(
+                FORBIDDEN_IMPORTS to listOf("com.example.*"),
+                ALLOWED_IMPORTS to listOf("com.example.Foo")
+            )
+            val findings = ForbiddenImport(config).lint(classCode, compile = false)
+            assertThat(findings).isEmpty()
+        }
     }
 }
