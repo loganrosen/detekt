@@ -29,12 +29,12 @@ import org.jetbrains.kotlin.psi.KtImportDirective
  *     - 'java.util.UUID'
  * ```
  *
- * Each import is matched by its fully qualified name. `import java.util.Date` is matched as `java.util.Date`,
- * and `import java.util.List as JList` is matched as `java.util.List` — the alias is ignored. An all-under
- * import is matched as it is written, so `import java.util.*` is matched as `java.util.*`. For backwards
- * compatibility it is additionally matched as `java.util`, the name with the trailing star removed.
+ * Detekt checks the name written after `import`, with any alias removed. `import java.util.Date` is checked
+ * as `java.util.Date`, `import java.util.List as JList` as `java.util.List`, and `import java.util.*` as
+ * `java.util.*` — an all-under import keeps its trailing star, so a pattern meant to match it needs one too.
+ * Both [forbiddenImports] and [allowedImports] are matched against that name.
  *
- * A pattern reports an import when it matches one of those names completely:
+ * A pattern reports an import when it matches that name completely:
  *
  * - `*` matches zero or more characters, including the package separator `.`. The pattern `java.util.*`
  *   therefore reports `import java.util.Date`, `import java.util.concurrent.Future` and `import java.util.*`.
@@ -46,13 +46,13 @@ import org.jetbrains.kotlin.psi.KtImportDirective
  * - `java.util.Date` reports only `import java.util.Date`. It does not report `import java.util.DateFormat`,
  *   nor `import java.util.*`, which detekt cannot expand without resolving the contents of the package.
  *
- * An import that matches both [forbiddenImports] and [allowedImports] is not reported. Both lists are matched
- * against the same names, so `allowedImports: ['java.util']` also exempts `import java.util.*`.
+ * An import that matches both [forbiddenImports] and [allowedImports] is not reported.
  *
  * <noncompliant>
  * import kotlin.jvm.JvmField
  * import java.util.Date
  * import java.util.*
+ * import java.util.UUID.*
  * </noncompliant>
  *
  * <compliant>
@@ -69,8 +69,9 @@ class ForbiddenImport(config: Config) :
     @Configuration(
         "List of imports, specified as glob patterns, that are forbidden. `*` matches zero or more characters " +
             "including the package separator, `?` matches exactly one character, any other regular expression " +
-            "syntax is passed through, and a pattern has to match the whole imported name. An all-under import " +
-            "such as `import java.util.*` is matched as written. It is recommended to also specify a reason."
+            "syntax is passed through, and a pattern has to match the whole imported name, including the " +
+            "trailing star of an all-under import such as `import java.util.*`. " +
+            "It is recommended to also specify a reason."
     )
     private val forbiddenImports: List<Forbidden> by config(valuesWithReason()) { list ->
         list.map { Forbidden(it.value.pathGlobToRegex(), it.reason) }
@@ -78,7 +79,8 @@ class ForbiddenImport(config: Config) :
 
     @Configuration(
         "List of imports, specified as glob patterns, to explicitly allow. " +
-            "Use this to specify exceptions to the forbidden imports. " +
+            "Use this to specify exceptions to the forbidden imports. A pattern has to match the whole " +
+            "imported name, including the trailing star of an all-under import. " +
             "An import that matches both lists is not reported."
     )
     private val allowedImports: List<Regex> by config(emptyList<String>()) { list ->
@@ -89,16 +91,13 @@ class ForbiddenImport(config: Config) :
         super.visitImportDirective(importDirective)
 
         val importedName = importDirective.importedFqName?.asString() ?: return
-        val import = if (importDirective.isAllUnder) "$importedName.*" else importedName
         // `importedFqName` omits the trailing star of an all-under import, so `import java.util.*` yields
-        // `java.util`. Match that spelling too, so patterns written without the star keep working.
-        // Both lists use the same candidates: before this rule matched the written form, `allowedImports`
-        // could only exempt an all-under import through the starless spelling, and that keeps working.
-        val candidates = if (importDirective.isAllUnder) listOf(import, importedName) else listOf(import)
+        // `java.util`. Restore the star so that both lists match the import as it is written in the source.
+        val import = if (importDirective.isAllUnder) "$importedName.*" else importedName
 
-        val forbidden = forbiddenImports.find { forbidden -> candidates.any(forbidden.import::matches) } ?: return
+        val forbidden = forbiddenImports.find { it.import.matches(import) } ?: return
 
-        if (importIsExplicitlyAllowed(candidates)) {
+        if (importIsExplicitlyAllowed(import)) {
             return
         }
         val reason = forbidden.reason?.let { "The import `$import` has been forbidden: ${forbidden.reason}" }
@@ -110,8 +109,8 @@ class ForbiddenImport(config: Config) :
     private fun defaultReason(forbiddenImport: String): String =
         "The import `$forbiddenImport` has been forbidden in the detekt config."
 
-    private fun importIsExplicitlyAllowed(imports: List<String>): Boolean =
-        allowedImports.any { allowed -> imports.any(allowed::matches) }
+    private fun importIsExplicitlyAllowed(import: String): Boolean =
+        allowedImports.any { allowed -> allowed.matches(import) }
 }
 
 private data class Forbidden(val import: Regex, val reason: String?)

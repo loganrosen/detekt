@@ -203,6 +203,9 @@ Several configuration concepts were removed or replaced:
 | `CouldBeSequence`             | `threshold`                                | `allowedOperations`  |
 
 - `ForbiddenImport` config keys changed — see the [updated rule docs](../rules/style#forbiddenimport).
+  Patterns in both `forbiddenImports` and `allowedImports` are now matched against the import exactly as it
+  is written, including the trailing star of an all-under import. A pattern that should match
+  `import java.util.*` has to be written as `java.util.*`, not `java.util`.
 - `FunctionOnlyReturningConstant` no longer accepts `excludeAnnotatedFunction`; use
   `ignoreAnnotated` instead.
 - `LateinitUsage` no longer accepts `excludeAnnotatedProperties`; use `ignoreAnnotated` instead.
